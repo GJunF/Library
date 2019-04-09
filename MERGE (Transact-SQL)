@@ -1,3 +1,5 @@
+https://docs.microsoft.com/zh-cn/previous-versions/sql/sql-server-2008-r2/bb510625(v=sql.105)
+
 MERGE Production.UnitMeasure AS target
     USING
         ( SELECT    @UnitMeasureCode ,
