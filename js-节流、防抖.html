@@ -1,0 +1,87 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title></title>
+    <meta charset="utf-8" />
+    <script src="Scripts/jquery-1.10.2.min.js"></script>
+    <script src="Scripts/moment.js"></script>
+    <script>
+        function debounce(fun, delay) {
+            return function (args) {
+                let that = this
+                let _args = args
+                clearTimeout(fun.id)
+                fun.id = setTimeout(function () {
+                    fun.call(that, _args)
+                }, delay)
+            }
+        }
+
+        function throttle(fun, delay) {
+            let last, deferTimer
+            return function (args) {
+                let that = this
+                let _args = arguments
+                let now = +new Date()
+                if (last && now < last + delay) {
+                    clearTimeout(deferTimer)
+                    deferTimer = setTimeout(function () {
+                        last = now
+                        fun.apply(that, _args)
+                    }, delay)
+                } else {
+                    last = now
+                    fun.apply(that, _args)
+                }
+            }
+        }
+
+
+        function throttle2(fun, delay) {
+            let last, deferTimer
+            return function (args) {
+                let that = this
+                let _args = arguments
+                let now = +new Date()
+                if (last && now < last + delay) {
+                    console.log("ignore");
+                } else {
+                    last = now
+                    fun.apply(that, _args)
+                }
+            }
+        }
+
+
+        $(document).ready(function () {
+            $("#btnNormal").click(function () {
+                console.log($(this).attr("value"));
+                console.log(moment().format("HH:mm:ss"));
+            });
+            $("#btnDebounce").click(debounce(function () {
+                console.log($(this).attr("value"));
+                console.log(moment().format("HH:mm:ss"));
+            }, 2000));
+            $("#btnThrottle").click(throttle(function () {
+                console.log($(this).attr("value"));
+                console.log(moment().format("HH:mm:ss"));
+            }, 2000));
+            $("#btnThrottle2").click(throttle2(function () {
+                console.log($(this).attr("value"));
+                console.log(moment().format("HH:mm:ss"));
+            }, 2000));
+        });
+
+    </script>
+</head>
+<body>
+    <input type="button" value="正常" id="btnNormal" />
+    <input type="button" value="防抖" id="btnDebounce" />
+    <input type="button" value="节流" id="btnThrottle" />
+    <input type="button" value="节流2" id="btnThrottle2" />
+
+
+
+</body>
+</html>
