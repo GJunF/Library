@@ -1,1 +1,0 @@
-如果是.NET CORE，BindPropertiesAttribute 的 SupportsGet 可以配置。
