@@ -18,7 +18,6 @@ namespace WebApplication1
             RouteConfig.RegisterRoutes(RouteTable.Routes);
             BundleConfig.RegisterBundles(BundleTable.Bundles);
             ValueProviderFactories.Factories.Add(new JQueryQueryStringValueProviderFactory());
-            ValueProviderFactories.Factories.Add(new CookieValueProviderFactory());
         }
     }
 }
