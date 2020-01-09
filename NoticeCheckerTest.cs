@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -11,9 +11,9 @@ namespace Utils
 
         public void Test1()
         {
-            NoticeChecker<string> nc = new NoticeChecker<string>((str, invokeCount) =>
+            NoticeChecker<string> nc = new NoticeChecker<string>((invokeCount, str) =>
             {
-                _Log.DebugFormat("{0}-{1}.", str, invokeCount);
+                _Log.DebugFormat("{0}-{1}.", invokeCount, str);
                 return false;
             }, 5, 5000, 2000);
             nc.Notice("test");
@@ -28,7 +28,7 @@ namespace Utils
         /// </summary>
         /// <param name="request">修改备注请求</param>
         /// <returns>是否修改成功</returns>
-        public bool ModifyRemark(ModifyRemarkRequest request, int invokeCount)
+        public bool ModifyRemark(int invokeCount, ModifyRemarkRequest request)
         {
             BaseResponse response = ModifyRemark(request.WechatFriendId, request.Remark);
             return response.Result == 0;
