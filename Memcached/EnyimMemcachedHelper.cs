@@ -80,13 +80,13 @@ namespace Abhs.Code.Memcached
         {
             if (key == null)
             {
-                throw new ArgumentNullException("key");
+                throw new ArgumentNullException(nameof(key));
             }
             if (valueFactory == null)
             {
-                throw new ArgumentNullException("valueFactory");
+                throw new ArgumentNullException(nameof(valueFactory));
             }
-
+            
             T local = default(T);
             IGetOperationResult<T> result = client.ExecuteGet<T>(key);
             if (result.Success && result.HasValue)
@@ -146,8 +146,8 @@ namespace Abhs.Code.Memcached
 
         public static List<string> Cachedump(this MemcachedClient client, int slab = 1, int limit = 0)
         {
-            List<string> allKeys = new List<string>();
-
+            List<string> keys = new List<string>();
+            
             Type t = client.GetType();
             PropertyInfo prop_Pool = t.GetProperty("Pool", BindingFlags.Instance | BindingFlags.NonPublic);
             PropertyInfo prop_KeyTransformer = t.GetProperty("KeyTransformer", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -167,38 +167,36 @@ namespace Abhs.Code.Memcached
 
                 if (commandResult.Success)
                 {
-                    allKeys.AddRange(op.Result.Keys);
+                    keys.AddRange(op.Result.Keys);
                 }
             }
-            return allKeys;
+            return keys;
         }
-
-
+        
         public static Dictionary<IPEndPoint, List<int>> Slabs(this MemcachedClient client)
         {
-            ServerStats s = client.Stats("items");
+            ServerStats stats = client.Stats("items");
 
-            Type t = s.GetType();
+            Type t = stats.GetType();
             FieldInfo field_Results = t.GetField("results", BindingFlags.Instance | BindingFlags.NonPublic);
 
-            Dictionary<IPEndPoint, Dictionary<string, string>> results = field_Results.GetValue(s) as Dictionary<IPEndPoint, Dictionary<string, string>>;
-
-            Dictionary<IPEndPoint, List<int>> servers = new Dictionary<IPEndPoint, List<int>>();
+            Dictionary<IPEndPoint, Dictionary<string, string>> results = field_Results.GetValue(stats) as Dictionary<IPEndPoint, Dictionary<string, string>>;
             Dictionary<IPEndPoint, Dictionary<string, string>>.Enumerator re = results.GetEnumerator();
+            Dictionary<IPEndPoint, List<int>> servers = new Dictionary<IPEndPoint, List<int>>();
             while (re.MoveNext())
             {
-                List<int> slabs = new List<int>();
+                List<int> members = new List<int>();
                 re.Current.Value.Keys.ToList().ForEach(key =>
                 {
                     Match match = Regex.Match(key, @"items:(?<slab>\d+):number");
-                    int slabId = 0;
-                    if (match.Success == true && int.TryParse(match.Groups["slab"].Value, out slabId))
+                    int slab = 0;
+                    if (match.Success == true && int.TryParse(match.Groups["slab"].Value, out slab))
                     {
-                        slabs.Add(slabId);
+                        members.Add(slab);
                     }
                 });
 
-                servers.Add(re.Current.Key, slabs);
+                servers.Add(re.Current.Key, members);
             }
 
             return servers;
@@ -212,9 +210,9 @@ namespace Abhs.Code.Memcached
         {
             Dictionary<IPEndPoint, List<int>> slabs = client.Slabs();
             List<string> keys = new List<string>();
-            slabs.Values.ToList().ForEach(items =>
+            slabs.Values.ToList().ForEach(members =>
             {
-                items.ForEach(slab =>
+                members.ForEach(slab =>
                 {
                     keys.AddRange(client.Cachedump(slab, 0));
                 });
