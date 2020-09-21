@@ -17,11 +17,12 @@ using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Abhs.Code.Memcached
 {
-    public class EnyimMemcachedHelper
+    public static class EnyimMemcachedHelper
     {
         private static MemcachedClient client;
 
@@ -138,16 +139,12 @@ namespace Abhs.Code.Memcached
             client.FlushAll();
         }
 
-        protected static string GetUniqueKey(string prefix = null)
+        static string GetUniqueKey(string prefix = null)
         {
             return (string.IsNullOrEmpty(prefix) ? "" : prefix + "_") + "_" + Guid.NewGuid().ToString("N");
         }
 
-        /// <summary>
-        /// 查询 Memcached 中所有的缓存键
-        /// </summary>
-        /// <returns>Memcached 中所有的缓存键</returns>
-        public static List<string> GetAllKeys()
+        public static List<string> Cachedump(this MemcachedClient client, int slab = 1, int limit = 0)
         {
             List<string> allKeys = new List<string>();
 
@@ -158,7 +155,7 @@ namespace Abhs.Code.Memcached
             IServerPool pool = prop_Pool.GetValue(client) as IServerPool;
             IMemcachedKeyTransformer keyTransformer = prop_KeyTransformer.GetValue(client) as IMemcachedKeyTransformer;
 
-            string command = "1 0";
+            string command = string.Format("{0} {1}", slab, limit);
 
             var hashedKey = keyTransformer.Transform(command.Replace(" ", "_"));
             var node = pool.Locate(hashedKey);
@@ -174,49 +171,58 @@ namespace Abhs.Code.Memcached
                 }
             }
             return allKeys;
+        }
 
 
-            //try
-            //{
-            //    IMemcachedClientConfiguration config = ConfigurationManager.GetSection("enyim.com/memcached") as IMemcachedClientConfiguration;
+        public static Dictionary<IPEndPoint, List<int>> Slabs(this MemcachedClient client)
+        {
+            ServerStats s = client.Stats("items");
 
-            //    MemcachedNode node = new MemcachedNode(config.Servers[0], config.SocketPool);
+            Type t = s.GetType();
+            FieldInfo field_Results = t.GetField("results", BindingFlags.Instance | BindingFlags.NonPublic);
 
-            //    PooledSocket socket = new PooledSocket(node.EndPoint, config.SocketPool.ConnectionTimeout, config.SocketPool.ReceiveTimeout, config.SocketPool.KeepAliveStartDelay, config.SocketPool.KeepAliveInterval);
+            Dictionary<IPEndPoint, Dictionary<string, string>> results = field_Results.GetValue(s) as Dictionary<IPEndPoint, Dictionary<string, string>>;
 
-            //    string command = "stats cachedump 1 0";
+            Dictionary<IPEndPoint, List<int>> servers = new Dictionary<IPEndPoint, List<int>>();
+            Dictionary<IPEndPoint, Dictionary<string, string>>.Enumerator re = results.GetEnumerator();
+            while (re.MoveNext())
+            {
+                List<int> slabs = new List<int>();
+                re.Current.Value.Keys.ToList().ForEach(key =>
+                {
+                    Match match = Regex.Match(key, @"items:(?<slab>\d+):number");
+                    int slabId = 0;
+                    if (match.Success == true && int.TryParse(match.Groups["slab"].Value, out slabId))
+                    {
+                        slabs.Add(slabId);
+                    }
+                });
 
-            //    socket.Write(TextSocketHelper.GetCommandBuffer(command + TextSocketHelper.CommandTerminator));
+                servers.Add(re.Current.Key, slabs);
+            }
 
-            //    while (true)
-            //    {
-            //        string response = TextSocketHelper.ReadResponse(socket);
-            //        //response is:
-            //        //ITEM testKey2 [3 b; 1600335168 s]
-            //        //ITEM key_name [value_length b; expire_time | access_time s]
-            //        // 0     1      2             3  4                         5
-            //        //1.2.2- 访问时间(timestamp)
-            //        //1.2.4+ 过期时间(timestamp)
-            //        //如果是永不过期的key，expire_time会显示为服务器启动的时间
+            return servers;
+        }
 
-            //        if (string.Compare(response, "END", StringComparison.Ordinal) == 0)
-            //            break;
-
-            //        if (response.Length < 5 || string.Compare(response, 0, "ITEM ", 0, 5, StringComparison.Ordinal) != 0)
-            //            throw new MemcachedClientException("No ITEM response received.\r\n" + response);
-
-            //        string[] parts = response.Split(' ');
-            //        allKeys.Add(parts[1]);
-            //    };
-            //}
-            //catch (Exception)
-            //{
-            //}
-            //return allKeys;
+        /// <summary>
+        /// 查询 Memcached 中所有的缓存键
+        /// </summary>
+        /// <returns>Memcached 中所有的缓存键</returns>
+        public static List<string> GetAllKeys()
+        {
+            Dictionary<IPEndPoint, List<int>> slabs = client.Slabs();
+            List<string> keys = new List<string>();
+            slabs.Values.ToList().ForEach(items =>
+            {
+                items.ForEach(slab =>
+                {
+                    keys.AddRange(client.Cachedump(slab, 0));
+                });
+            });
+            return keys;
         }
 
     }
-
 
     internal static class TextSocketHelper
     {
