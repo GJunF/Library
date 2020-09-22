@@ -86,7 +86,7 @@ namespace Abhs.Code.Memcached
             {
                 throw new ArgumentNullException(nameof(valueFactory));
             }
-            
+
             T local = default(T);
             IGetOperationResult<T> result = client.ExecuteGet<T>(key);
             if (result.Success && result.HasValue)
@@ -144,36 +144,62 @@ namespace Abhs.Code.Memcached
             return (string.IsNullOrEmpty(prefix) ? "" : prefix + "_") + "_" + Guid.NewGuid().ToString("N");
         }
 
-        public static List<string> Cachedump(this MemcachedClient client, int slab = 1, int limit = 0)
+        public static ICachedumpOperationResult Cachedump(this MemcachedClient client, int slab = 1, int limit = 0)
         {
-            List<string> keys = new List<string>();
-            
+
+            #region 反射获取 IServerPool 属性值
             Type t = client.GetType();
             PropertyInfo prop_Pool = t.GetProperty("Pool", BindingFlags.Instance | BindingFlags.NonPublic);
             PropertyInfo prop_KeyTransformer = t.GetProperty("KeyTransformer", BindingFlags.Instance | BindingFlags.NonPublic);
 
             IServerPool pool = prop_Pool.GetValue(client) as IServerPool;
             IMemcachedKeyTransformer keyTransformer = prop_KeyTransformer.GetValue(client) as IMemcachedKeyTransformer;
+            #endregion
 
-            string command = string.Format("{0} {1}", slab, limit);
+            string key = string.Format("{0} {1}", slab, limit);
 
-            var hashedKey = keyTransformer.Transform(command.Replace(" ", "_"));
+            var hashedKey = keyTransformer.Transform(key.Replace(" ", "_"));
             var node = pool.Locate(hashedKey);
+
+            ICachedumpOperationResultFactory CachedumpOperationResultFactory = new DefaultCachedumpOperationResultFactory();
+            var result = CachedumpOperationResultFactory.Create();
 
             if (node != null)
             {
-                ICachedumpOperation op = new CachedumpOperation(command);
-                var commandResult = node.Execute(op);
+                var command = new CachedumpOperation(key);
+                var commandResult = node.Execute(command);
 
                 if (commandResult.Success)
                 {
-                    keys.AddRange(op.Result.Keys);
+                    result.Value = new Dictionary<string, string>();
+
+                    command.Result.ForEach(item =>
+                    {
+                        //item is:
+                        //ITEM testKey2 [3 b; 1600335168 s]
+                        //ITEM key_name [value_length b; expire_time | access_time s]
+                        // 0     1      2             3  4                         5
+                        //1.2.2- 访问时间(timestamp)
+                        //1.2.4+ 过期时间(timestamp)
+                        //如果是永不过期的key，expire_time会显示为服务器启动的时间
+
+                        string[] parts = item.Split(' ');
+                        result.Value.Add(parts[1], string.Join(" ", parts, 2, parts.Length - 2));
+                    });
+                    result.Pass();
+                    return result;
+                }
+                else
+                {
+                    commandResult.Combine(result);
+                    return result;
                 }
             }
-            return keys;
+            result.Fail("Unable to locate node");
+            return result;
         }
-        
-        public static Dictionary<IPEndPoint, List<int>> Slabs(this MemcachedClient client)
+
+        static Dictionary<IPEndPoint, List<int>> Slabs()
         {
             ServerStats stats = client.Stats("items");
 
@@ -208,13 +234,15 @@ namespace Abhs.Code.Memcached
         /// <returns>Memcached 中所有的缓存键</returns>
         public static List<string> GetAllKeys()
         {
-            Dictionary<IPEndPoint, List<int>> slabs = client.Slabs();
+            Dictionary<IPEndPoint, List<int>> slabs = Slabs();
             List<string> keys = new List<string>();
             slabs.Values.ToList().ForEach(members =>
             {
                 members.ForEach(slab =>
                 {
-                    keys.AddRange(client.Cachedump(slab, 0));
+                    ICachedumpOperationResult result = client.Cachedump(slab, 0);
+                    if (result.Success && result.HasValue)
+                        keys.AddRange(result.Value.Keys);
                 });
             });
             return keys;
@@ -341,49 +369,40 @@ namespace Abhs.Code.Memcached
 
     public interface ICachedumpOperation : IOperation
     {
-        string Paras { get; }
-        Dictionary<string, string> Result { get; }
+        string Key { get; }
+        List<string> Result { get; }
     }
 
     public class CachedumpOperation : Operation, ICachedumpOperation
     {
-        internal CachedumpOperation(string paras)
+        internal CachedumpOperation(string key)
         {
-            this.paras = paras;
+            this.key = key;
         }
-        private string paras;
-        private Dictionary<string, string> result;
+        private string key;
+        private List<string> result;
 
         protected override IList<ArraySegment<byte>> GetBuffer()
         {
-            var command = "stats cachedump " + this.Paras + TextSocketHelper.CommandTerminator;
+            var command = "stats cachedump " + this.Key + TextSocketHelper.CommandTerminator;
 
             return TextSocketHelper.GetCommandBuffer(command);
         }
 
         protected override IOperationResult ReadResponse(PooledSocket socket)
         {
-            this.result = new Dictionary<string, string>();
+            this.result = new List<string>();
 
             while (true)
             {
                 string response = TextSocketHelper.ReadResponse(socket);
-                //response is:
-                //ITEM testKey2 [3 b; 1600335168 s]
-                //ITEM key_name [value_length b; expire_time | access_time s]
-                // 0     1      2             3  4                         5
-                //1.2.2- 访问时间(timestamp)
-                //1.2.4+ 过期时间(timestamp)
-                //如果是永不过期的key，expire_time会显示为服务器启动的时间
-
                 if (string.Compare(response, "END", StringComparison.Ordinal) == 0)
                     break;
 
                 if (response.Length < 5 || string.Compare(response, 0, "ITEM ", 0, 5, StringComparison.Ordinal) != 0)
                     throw new MemcachedClientException("No ITEM response received.\r\n" + response);
 
-                string[] parts = response.Split(' ');
-                this.result.Add(parts[1], string.Join(" ", parts, 2, parts.Length - 2));
+                this.result.Add(response);
             };
             var result = new CachedumpOperationResult();
             return result.Pass();
@@ -394,33 +413,64 @@ namespace Abhs.Code.Memcached
             throw new System.NotSupportedException();
         }
 
-        public Dictionary<string, string> Result
+        public List<string> Result
         {
             get { return this.result; }
         }
 
-        Dictionary<string, string> ICachedumpOperation.Result
+        List<string> ICachedumpOperation.Result
         {
             get { return this.result; }
         }
 
-        public string Paras
+        public string Key
         {
             get
             {
-                return this.paras;
+                return this.key;
             }
         }
-        string ICachedumpOperation.Paras
+        string ICachedumpOperation.Key
         {
             get
             {
-                return this.paras;
+                return this.key;
             }
         }
     }
 
-    public class CachedumpOperationResult : OperationResultBase
+    public interface ICachedumpOperationResult : INullableOperationResult<Dictionary<string, string>>
     {
+    }
+    public class CachedumpOperationResult : OperationResultBase, ICachedumpOperationResult
+    {
+        public bool HasValue
+        {
+            get
+            {
+                return Value != null;
+            }
+        }
+
+        public Dictionary<string, string> Value
+        {
+            get; set;
+        }
+    }
+    public interface ICachedumpOperationResultFactory
+    {
+        ICachedumpOperationResult Create();
+    }
+    public class DefaultCachedumpOperationResultFactory : ICachedumpOperationResultFactory
+    {
+        public ICachedumpOperationResult Create()
+        {
+            return new CachedumpOperationResult()
+            {
+                Message = string.Empty,
+                Value = null,
+                Success = false
+            };
+        }
     }
 }
